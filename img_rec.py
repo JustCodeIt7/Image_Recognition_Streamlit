@@ -1,22 +1,14 @@
 # =========================================
 # Tutorial Step 1: Imports
 # =========================================
-# Core Streamlit library
 import streamlit as st
-# PyTorch for deep learning models and tensors
 import torch
-# Torchvision for pre-trained models and image transforms
 import torchvision
 from torchvision import transforms
-# PIL (Pillow) for image manipulation
 from PIL import Image
-# Requests for fetching data from URLs (like labels)
 import requests
-# io for handling byte streams (used with file uploader)
 import io
-# json for parsing labels data
 import json
-# Typing for type hints (good practice)
 from typing import List, Tuple, Optional
 
 # =========================================
