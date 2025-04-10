@@ -1,51 +1,48 @@
+# =========================================
+# Tutorial Step 1: Imports
+# =========================================
+# Core Streamlit library
 import streamlit as st
+# PyTorch for deep learning models and tensors
 import torch
+# Torchvision for pre-trained models and image transforms
 import torchvision
 from torchvision import transforms
+# PIL (Pillow) for image manipulation
 from PIL import Image
+# Requests for fetching data from URLs (like labels)
 import requests
+# io for handling byte streams (used with file uploader)
 import io
+# json for parsing labels data
 import json
+# Typing for type hints (good practice)
 from typing import List, Tuple, Optional
 
-# Set page configuration (optional, but good practice)
+# =========================================
+# Tutorial Step 2: Page Configuration (Optional)
+# =========================================
+# Set the title and icon shown in the browser tab
 st.set_page_config(
-    page_title="PyTorch Image Recognition App",
+    page_title="PyTorch Image Recognizer",
     page_icon="🖼️",
     layout="centered",
 )
 
-# --- Model and Label Loading (Cached) ---
+# =========================================
+# Tutorial Step 3: Helper Functions (Model, Labels, Prediction)
+# =========================================
 
-@st.cache_resource # Use cache_resource for non-data objects like models
-def load_model(model_name: str = "resnet18"):
-    """Loads a pre-trained PyTorch model."""
-    st.write(f"Loading {model_name} model...")
-    if model_name == "resnet18":
-        weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1
-        model = torchvision.models.resnet18(weights=weights)
-    elif model_name == "resnet50":
-        weights = torchvision.models.ResNet50_Weights.IMAGENET1K_V2 # Use V2 for potentially better accuracy
-        model = torchvision.models.resnet50(weights=weights)
-    elif model_name == "efficientnet_b0":
-        weights = torchvision.models.EfficientNet_B0_Weights.IMAGENET1K_V1
-        model = torchvision.models.efficientnet_b0(weights=weights)
-    else:
-        st.error(f"Model {model_name} not supported.")
-        return None, None
-
-    model.eval() # Set model to evaluation mode (important!)
-    preprocess = weights.transforms() # Get the recommended transforms for the model
-    st.write("Model loaded successfully!")
-    return model, preprocess
-
-@st.cache_data # Use cache_data for data like labels
+# --- Function to Load ImageNet Labels ---
+# Use @st.cache_data for functions returning serializable data (like lists, dicts)
+# This prevents re-downloading labels on every interaction.
+@st.cache_data
 def load_imagenet_labels() -> Optional[List[str]]:
-    """Loads ImageNet class labels."""
+    """Loads the ImageNet class labels from a standard URL."""
     LABELS_URL = "https://raw.githubusercontent.com/anishathalye/imagenet-simple-labels/master/imagenet-simple-labels.json"
     try:
         response = requests.get(LABELS_URL)
-        response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+        response.raise_for_status() # Check for download errors
         labels = response.json()
         return labels
     except requests.exceptions.RequestException as e:
@@ -55,98 +52,183 @@ def load_imagenet_labels() -> Optional[List[str]]:
         st.error("Error decoding ImageNet labels JSON.")
         return None
 
-# --- Image Processing and Prediction ---
+# --- Function to Load PyTorch Model ---
+# Use @st.cache_resource for non-serializable objects like ML models
+# This prevents reloading the large model file on every interaction.
+@st.cache_resource
+def load_pytorch_model(model_name: str = "resnet18"):
+    """Loads a specified pre-trained PyTorch model and its preprocessing pipeline."""
+    st.write(f"Loading {model_name} model...") # Show loading message
+    weights = None
+    model = None
 
-def predict(model, preprocess, image: Image.Image, top_k: int = 5) -> Optional[List[Tuple[str, float]]]:
-    """Processes an image and returns top K predictions."""
+    # Select the appropriate weights and model based on the name
+    if model_name == "resnet18":
+        weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1
+        model = torchvision.models.resnet18(weights=weights)
+    elif model_name == "resnet50":
+        weights = torchvision.models.ResNet50_Weights.IMAGENET1K_V2
+        model = torchvision.models.resnet50(weights=weights)
+    elif model_name == "efficientnet_b0":
+        weights = torchvision.models.EfficientNet_B0_Weights.IMAGENET1K_V1
+        model = torchvision.models.efficientnet_b0(weights=weights)
+    else:
+        st.error(f"Model {model_name} not supported.")
+        return None, None # Return None if model is not found
+
+    # Crucial: Set the model to evaluation mode (disables dropout, uses batch norm stats)
+    model.eval()
+
+    # Get the preprocessing steps recommended for this model
+    preprocess = weights.transforms()
+    st.write("Model loaded successfully!")
+    return model, preprocess
+
+# --- Function to Make Predictions ---
+def predict(model, preprocess, image: Image.Image, labels: List[str], top_k: int = 5) -> Optional[List[Tuple[str, float]]]:
+    """Processes an image and returns the top K predictions."""
+    # 1. Ensure image is RGB
     if image.mode != "RGB":
-        image = image.convert("RGB") # Ensure image is in RGB format
+        image = image.convert("RGB")
 
+    # 2. Apply preprocessing transformations
     input_tensor = preprocess(image)
-    input_batch = input_tensor.unsqueeze(0) # Create a mini-batch as expected by the model
 
-    # Move tensor to GPU if available (optional, but faster)
+    # 3. Add a batch dimension (models expect batches)
+    input_batch = input_tensor.unsqueeze(0)
+
+    # 4. Optional: Move tensor to GPU if available for faster inference
     if torch.cuda.is_available():
         input_batch = input_batch.to('cuda')
-        model.to('cuda')
+        model.to('cuda') # Also move the model to GPU
 
-    with torch.no_grad(): # Turn off gradient calculation for inference
+    # 5. Perform inference without calculating gradients
+    with torch.no_grad():
         output = model(input_batch)
 
-    # Get probabilities using softmax
+    # 6. Get probabilities using softmax
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 
-    # Load labels
-    imagenet_labels = load_imagenet_labels()
-    if not imagenet_labels:
-        st.error("Cannot make predictions without ImageNet labels.")
-        return None
-
-    # Get top K predictions
+    # 7. Get the top K probabilities and their corresponding class indices
     top_prob, top_indices = torch.topk(probabilities, top_k)
 
-    # Map indices to labels and probabilities
+    # 8. Map indices to class labels and format the output
     predictions = [
-        (imagenet_labels[idx], prob.item())
+        (labels[idx], prob.item())  # .item() gets the Python number from a tensor
         for idx, prob in zip(top_indices, top_prob)
     ]
 
     return predictions
 
-# --- Streamlit App UI ---
 
+# =========================================
+# Tutorial Step 4: Main App Interface Setup
+# =========================================
 st.title("🖼️ PyTorch Image Recognition")
-st.write("Upload an image, and this app will classify it using a pre-trained PyTorch model (ResNet or EfficientNet).")
+st.write(
+    "Upload an image, and this app will classify it using a pre-trained "
+    "PyTorch model (ResNet or EfficientNet)."
+)
 
-# --- Sidebar for Options ---
+# =========================================
+# Tutorial Step 5: Sidebar for Options (Introduce Later?)
+# =========================================
+# You can initially skip the sidebar and hardcode model_name = "resnet18"
+# and top_k = 5, then introduce this section later in the tutorial.
 st.sidebar.header("⚙️ Options")
+
+# Model selection dropdown
 model_choice = st.sidebar.selectbox(
     "Choose a Model:",
     ("resnet18", "resnet50", "efficientnet_b0"),
-    index=0 # Default to resnet18
+    index=0 # Default selection (resnet18)
 )
+
+# Slider to choose number of predictions
 top_k_slider = st.sidebar.slider(
     "Number of Predictions to Show:",
     min_value=1,
     max_value=10,
-    value=5
+    value=5 # Default value
 )
 
-# Load selected model and its preprocessing steps
-model, preprocess = load_model(model_choice)
+# =========================================
+# Tutorial Step 6: Load Model and Labels based on Choice
+# =========================================
+# Load the labels first (required for prediction function)
+imagenet_labels = load_imagenet_labels()
 
-# File Uploader
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+# Load the selected model and its preprocessing function
+# This will only run once per model choice due to caching
+if imagenet_labels:
+    # Only attempt to load model if labels are available
+    selected_model, preprocess_pipeline = load_pytorch_model(model_choice)
+else:
+    st.error("Cannot proceed without ImageNet labels. Please check the connection or URL.")
+    st.stop() # Stop the app script if labels can't be loaded
 
-if uploaded_file is not None and model is not None and preprocess is not None:
-    # Read the image file
-    try:
-        image = Image.open(uploaded_file)
+# =========================================
+# Tutorial Step 7: File Uploader
+# =========================================
+uploaded_file = st.file_uploader(
+    "Choose an image...",
+    type=["jpg", "jpeg", "png"] # Allowed file types
+)
 
-        # Display the uploaded image
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(image, caption='Uploaded Image', use_column_width=True)
+# =========================================
+# Tutorial Step 8: Process Upload and Display Results
+# =========================================
+if uploaded_file is not None:
+    # Check if model loading was successful before proceeding
+    if selected_model is not None and preprocess_pipeline is not None:
+        # Read the uploaded image file
+        try:
+            image = Image.open(uploaded_file)
 
-        # Perform prediction
-        with st.spinner('🧠 Classifying...'):
-            predictions = predict(model, preprocess, image, top_k=top_k_slider)
+            # --- Display Uploaded Image ---
+            # Use columns for side-by-side layout (can introduce this layout later)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.image(image, caption='Uploaded Image', use_column_width=True)
 
-        # Display predictions
-        with col2:
-            st.subheader(f"Top {top_k_slider} Predictions:")
-            if predictions:
-                for label, probability in predictions:
-                    st.write(f"- {label}: {probability:.2%}")
-            else:
-                st.error("Prediction failed.")
+            # --- Perform Prediction ---
+            # Show a spinner while the model is working
+            with st.spinner('🧠 Classifying...'):
+                # Call the predict function
+                predictions = predict(
+                    selected_model,
+                    preprocess_pipeline,
+                    image,
+                    imagenet_labels, # Pass the loaded labels
+                    top_k=top_k_slider # Pass the selected K value
+                )
 
-    except Exception as e:
-        st.error(f"Error processing image: {e}")
-        st.error("Please try uploading a valid image file (JPG, JPEG, PNG).")
+            # --- Display Predictions ---
+            with col2:
+                st.subheader(f"Top {top_k_slider} Predictions:")
+                if predictions:
+                    # Nicely format the output
+                    for label, probability in predictions:
+                        st.write(f"- {label}: {probability:.2%}") # Format as percentage
+                else:
+                    # Handle case where prediction might fail (though less likely here)
+                    st.error("Prediction failed.")
+
+        except Exception as e:
+            st.error(f"Error processing image: {e}")
+            st.error("Please try uploading a valid image file (JPG, JPEG, PNG).")
+    else:
+        # This message shows if model loading failed earlier
+        st.error(f"Model '{model_choice}' could not be loaded. Cannot classify the image.")
 
 elif uploaded_file is None:
-    st.info("Please upload an image file.")
+    # Initial message when no file is uploaded
+    st.info("👆 Upload an image file to get started.")
 
+# =========================================
+# Tutorial Step 9: Footer/Credits (Optional)
+# =========================================
 st.sidebar.markdown("---")
-st.sidebar.markdown("Built with [Streamlit](https://streamlit.io) & [PyTorch](https://pytorch.org)")
+st.sidebar.markdown(
+    "Built with [Streamlit](https://streamlit.io) & [PyTorch](https://pytorch.org)"
+)
