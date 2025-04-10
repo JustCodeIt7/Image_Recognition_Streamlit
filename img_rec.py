@@ -225,10 +225,3 @@ elif uploaded_file is None:
     # Initial message when no file is uploaded
     st.info("👆 Upload an image file to get started.")
 
-# =========================================
-# Tutorial Step 9: Footer/Credits (Optional)
-# =========================================
-st.sidebar.markdown("---")
-st.sidebar.markdown(
-    "Built with [Streamlit](https://streamlit.io) & [PyTorch](https://pytorch.org)"
-)
